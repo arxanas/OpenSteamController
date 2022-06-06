@@ -1304,6 +1304,11 @@ void trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	if (x_pos > 0 && y_pos > 0)  {
 		*xLoc = x_pos;
 		*yLoc = y_pos;
+	} else if (y_pos == -1) {
+		// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
+		// Compensate for the dead zone at the top of the touchpad.
+		*xLoc = x_pos;
+		*yLoc = TPAD_MAX_Y;
 	}
 }
 

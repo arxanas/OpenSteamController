@@ -1270,6 +1270,8 @@ static void updateReports(void) {
 	updateAdcVals();
 	trackpadLocUpdate(L_TRACKPAD);
 	trackpadLocUpdate(R_TRACKPAD);
+	int leftAnalogClick = getLeftTrackpadClickState();
+	int rightAnalogClick = getRightTrackpadClickState();
 
 	// Associate Steam Controller buttons to Switch Controller buttons:
 	controllerUsbData.statusReport.rightTrigger = getRightTriggerState();
@@ -1277,16 +1279,18 @@ static void updateReports(void) {
 	controllerUsbData.statusReport.rightBumper = getRightBumperState();
 	controllerUsbData.statusReport.leftBumper = getLeftBumperState();
 
-	controllerUsbData.statusReport.xButton = getYButtonState();
-	controllerUsbData.statusReport.aButton = getBButtonState();
-	controllerUsbData.statusReport.bButton = getAButtonState();
-	controllerUsbData.statusReport.yButton = getXButtonState();
+	// Note that the face buttons are inverted (X <=> Y, A <=> B) between
+	// the Steam Controller layout and the Pro Controller layout.
+	controllerUsbData.statusReport.xButton = getYButtonState() || getRightGripState();
+	controllerUsbData.statusReport.aButton = getBButtonState() || rightAnalogClick;
+	controllerUsbData.statusReport.bButton = getAButtonState() || leftAnalogClick;
+	controllerUsbData.statusReport.yButton = getXButtonState() || getLeftGripState();
 
-	controllerUsbData.statusReport.snapshotButton = getLeftGripState();
+	controllerUsbData.statusReport.snapshotButton = 0; // getLeftGripState();
 	controllerUsbData.statusReport.homeButton = getSteamButtonState();
 
-	controllerUsbData.statusReport.rightAnalogClick = getRightTrackpadClickState();
-	controllerUsbData.statusReport.leftAnalogClick = getJoyClickState();
+	controllerUsbData.statusReport.leftAnalogClick = leftAnalogClick; // getJoyClickState();
+	controllerUsbData.statusReport.rightAnalogClick = rightAnalogClick;
 	controllerUsbData.statusReport.plusButton = getFrontRightButtonState();
 	controllerUsbData.statusReport.minusButton = getFrontLeftButtonState();
 
@@ -1304,6 +1308,7 @@ static void updateReports(void) {
 	// Default to neutral position
 	controllerUsbData.statusReport.dPad = DPAD_NEUTRAL;
 
+	/*
 	// Have Left Trackpad act as DPAD:
 	// Only check (and convert) finger position to DPAD location on click
 	if (getLeftTrackpadClickState()) {
@@ -1338,9 +1343,30 @@ static void updateReports(void) {
 			}
 		}
 	}
+	*/
+
+	// Have Left Trackpad act as Left Analog:
+	trackpadGetLastXY(L_TRACKPAD, &tpad_x, &tpad_y);
+	controllerUsbData.statusReport.leftAnalogX = convToPowerAJoyPos(tpad_x,
+		0, TPAD_MAX_X/2, TPAD_MAX_X);
+	controllerUsbData.statusReport.leftAnalogY = convToPowerAJoyPos(
+		 TPAD_MAX_Y - tpad_y, 0, TPAD_MAX_Y/2, TPAD_MAX_Y);
 
 	// Have Right Trackpad act as Right Analog:
 	trackpadGetLastXY(R_TRACKPAD, &tpad_x, &tpad_y);
+	if (!rightAnalogClick) {
+		// Customization: only input the tilt stick if the right trackpad is
+		// being clicked. Additionally, input the logical A button if the
+		// trackpad is being clicked. This is for Super Smash Bros Ultimate,
+		// where I want to delay the input of the tilt stick until I click it
+		// (which requires a similar amount of force to actually tilting an
+		// analog stick). I also want to be able to input A without moving my
+		// thumb from the trackpad. (In principle, you can even rebind the
+		// right analog stick click on the Pro Controller to input A, but
+		// actually clicking it isn't ergonomic.)
+		tpad_x = TPAD_MAX_X/2;
+		tpad_y = TPAD_MAX_Y - (TPAD_MAX_Y/2);
+	}
 	controllerUsbData.statusReport.rightAnalogX = convToPowerAJoyPos(tpad_x, 
 		0, TPAD_MAX_X/2, TPAD_MAX_X);
 	controllerUsbData.statusReport.rightAnalogY = convToPowerAJoyPos(
