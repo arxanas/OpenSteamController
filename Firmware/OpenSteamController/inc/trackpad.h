@@ -45,7 +45,8 @@ typedef enum Trackpad_t {
 void initTrackpad(void);
 
 void trackpadLocUpdate(Trackpad trackpad);
-void trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc);
+bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc);
+void resetTrackpadHaptic(Trackpad trackpad);
 
 void trackpadCmdUsage(void);
 int trackpadCmdFnc(int argc, const char* argv[]);

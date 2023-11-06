@@ -28,6 +28,7 @@
 #ifndef _HAPTIC_ 
 #define _HAPTIC_
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -52,6 +53,7 @@ typedef struct Note {
 } Note;
 
 void initHaptics(void);
+bool isHapticBusy(enum Haptic haptic);
 int playHaptic(enum Haptic haptic, const struct Note* notes, uint32_t numNotes);
 
 void usleepHaptic(uint32_t usec);

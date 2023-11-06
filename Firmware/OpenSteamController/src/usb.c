@@ -1346,14 +1346,17 @@ static void updateReports(void) {
 	*/
 
 	// Have Left Trackpad act as Left Analog:
-	trackpadGetLastXY(L_TRACKPAD, &tpad_x, &tpad_y);
+	bool leftTrackpadTapped = trackpadGetLastXY(L_TRACKPAD, &tpad_x, &tpad_y);
 	controllerUsbData.statusReport.leftAnalogX = convToPowerAJoyPos(tpad_x,
 		0, TPAD_MAX_X/2, TPAD_MAX_X);
 	controllerUsbData.statusReport.leftAnalogY = convToPowerAJoyPos(
 		 TPAD_MAX_Y - tpad_y, 0, TPAD_MAX_Y/2, TPAD_MAX_Y);
+	if (!leftAnalogClick && !leftTrackpadTapped) {
+		resetTrackpadHaptic(L_TRACKPAD);
+	}
 
 	// Have Right Trackpad act as Right Analog:
-	trackpadGetLastXY(R_TRACKPAD, &tpad_x, &tpad_y);
+	bool rightTrackpadTapped = trackpadGetLastXY(R_TRACKPAD, &tpad_x, &tpad_y);
 	if (!rightAnalogClick) {
 		// Customization: only input the tilt stick if the right trackpad is
 		// being clicked. Additionally, input the logical A button if the
@@ -1366,6 +1369,9 @@ static void updateReports(void) {
 		// actually clicking it isn't ergonomic.)
 		tpad_x = TPAD_MAX_X/2;
 		tpad_y = TPAD_MAX_Y - (TPAD_MAX_Y/2);
+		if (!rightTrackpadTapped) {
+			resetTrackpadHaptic(R_TRACKPAD);
+		}
 	}
 	controllerUsbData.statusReport.rightAnalogX = convToPowerAJoyPos(tpad_x, 
 		0, TPAD_MAX_X/2, TPAD_MAX_X);

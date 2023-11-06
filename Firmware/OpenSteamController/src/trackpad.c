@@ -25,6 +25,7 @@
  * SOFTWARE.
  */
 
+#include "haptic.h"
 #include "trackpad.h"
 
 #include "lpc_types.h"
@@ -34,6 +35,8 @@
 #include "usb.h"
 #include "eeprom_access.h"
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -848,6 +851,49 @@ void trackpadLocUpdate(Trackpad trackpad) {
 		TPAD_SYSCFG1_ANYMEASEN_BIT | TPAD_SYSCFG1_TRACKDIS_BIT);
 }
 
+uint32_t norm2(uint16_t lhs, uint16_t rhs) {
+	uint32_t diff = lhs >= rhs ? lhs - rhs : rhs - lhs;
+	return diff * diff;
+}
+
+static struct { uint16_t x; uint16_t y; } lastXY[] = { {0, 0}, {0, 0} };
+static Note trackpadNotes[2] = { {0, 0, 0, 0}, {0, 0, 0, 0} };
+enum InnerRingState {
+	INNER_RING_UNSET,
+	INNER_RING_INSIDE,
+	INNER_RING_OUTSIDE,
+};
+static enum InnerRingState innerRingStates[2] = { INNER_RING_UNSET, INNER_RING_UNSET };
+
+void resetTrackpadHaptic(Trackpad trackpad) {
+	switch (trackpad) {
+		case L_TRACKPAD:
+			innerRingStates[L_HAPTIC] = INNER_RING_UNSET;
+			break;
+		case R_TRACKPAD:
+			innerRingStates[R_HAPTIC] = INNER_RING_UNSET;
+			break;
+	}
+}
+
+void playTrackpadHaptic(enum Haptic haptic, uint16_t tpadX, uint16_t tpadY) {
+	if (isHapticBusy(haptic)) {
+		return;
+	}
+
+	uint32_t distanceFromCenterSquared = norm2(tpadX, TPAD_MAX_X/2) + norm2(tpadY, TPAD_MAX_Y/2);
+	enum InnerRingState state = (distanceFromCenterSquared < norm2(200, 0)) ? INNER_RING_INSIDE : INNER_RING_OUTSIDE;
+	if (state == innerRingStates[haptic]) {
+		return;
+	}
+	innerRingStates[haptic] = state;
+	Note* note = &trackpadNotes[haptic];
+	note->duration = (state == INNER_RING_INSIDE) ? 50 : 35; // ms, 0-65535
+	note->dutyCycle = 31; // ??, 0-255
+	note->pulseFreq = (state == INNER_RING_INSIDE) ? 160 : 128; // Hz, 0-65535
+	playHaptic(haptic, note, 1);
+}
+
 /**
  * Convert the last updated AnyMeas ADC values to X/Y location. If update to
  *  AnyMeas ADC values has been requested (i.e. via trackpadLocUpdate()), this
@@ -861,8 +907,7 @@ void trackpadLocUpdate(Trackpad trackpad) {
  *
  * \return None.
  */
-void trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
-
+bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	// Set defaults in case finger is not down
 	*xLoc = 1200/2;
 	*yLoc = 700/2;
@@ -1152,7 +1197,7 @@ void trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 
 	// Early exit if no finger down detected in X position calculation
 	if (x_pos < 0 || max_amplitude_x < FINGER_DOWN_REQUIRED_AMPLITUDE) {
-		return;
+		return false;
 	}
 
 	// Calculate yLoc
@@ -1301,15 +1346,40 @@ void trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	}
 
 	// Update outputs if finger was down (i.e. x_pos and y_pos are both valid)
-	if (x_pos > 0 && y_pos > 0)  {
-		*xLoc = x_pos;
-		*yLoc = y_pos;
-	} else if (y_pos == -1) {
-		// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
-		// Compensate for the dead zone at the top of the touchpad.
-		*xLoc = x_pos;
-		*yLoc = TPAD_MAX_Y;
+	if (x_pos == -1 && y_pos == -1) {
+		return false;
 	}
+	// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
+	// Compensate for the dead zone at the top of the touchpad.
+	x_pos = x_pos == -1 ? 0 : x_pos;
+	y_pos = y_pos == -1 ? TPAD_MAX_Y : y_pos;
+	*xLoc = x_pos;
+	*yLoc = y_pos;
+
+	// Save last X/Y values for next time
+	uint16_t lastX = lastXY[trackpad].x;
+	uint16_t lastY = lastXY[trackpad].y;
+	lastXY[trackpad].x = *xLoc;
+	lastXY[trackpad].y = *yLoc;
+
+	// If trackpad has moved significantly since last time, then play haptic.
+	uint32_t threshold = norm2(10, 0);
+	if (norm2(lastX, *xLoc) > threshold || norm2(lastY, *yLoc) > threshold) {
+		Haptic haptic;
+		switch (trackpad) {
+			case L_TRACKPAD:
+				haptic = L_HAPTIC;
+				break;
+			case R_TRACKPAD:
+				haptic = R_HAPTIC;
+				break;
+			default:
+				return true;
+		}
+		playTrackpadHaptic(haptic, *xLoc, *yLoc);
+	}
+
+	return true;
 }
 
 /**

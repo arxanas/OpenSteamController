@@ -296,6 +296,9 @@ void initHaptics(void) {
 	Chip_TIMER_Enable(hapticTimer);
 }
 
+bool isHapticBusy(enum Haptic haptic) {
+	return hapticBusy[haptic];
+}
 
 /**
  * Initiate playing a sequence of notes via a particular haptic.
