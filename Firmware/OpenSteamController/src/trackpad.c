@@ -35,6 +35,7 @@
 #include "usb.h"
 #include "eeprom_access.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -865,6 +866,11 @@ enum InnerRingState {
 };
 static enum InnerRingState innerRingStates[2] = { INNER_RING_UNSET, INNER_RING_UNSET };
 
+const double PI = 3.1415926;
+const uint32_t NUM_NOTCHES = 8; // 16;
+typedef uint32_t Notch;
+static Notch notchStates[2] = { 0, 0 };
+
 void resetTrackpadHaptic(Trackpad trackpad) {
 	switch (trackpad) {
 		case L_TRACKPAD:
@@ -881,17 +887,28 @@ void playTrackpadHaptic(enum Haptic haptic, uint16_t tpadX, uint16_t tpadY) {
 		return;
 	}
 
+	double angle = atan2(tpadY - TPAD_MAX_Y/2, tpadX - TPAD_MAX_X/2);
+	// Normalize the angle to the range [0, 2*PI)
+    angle = fmod(angle, 2 * PI);
+    if (angle < 0) {
+        angle += 2 * PI;
+    }
+	Notch notch = (Notch)(angle / ((2 * PI) / NUM_NOTCHES));
+	Notch lastNotch = notchStates[haptic];
+	notchStates[haptic] = notch;
+
 	uint32_t distanceFromCenterSquared = norm2(tpadX, TPAD_MAX_X/2) + norm2(tpadY, TPAD_MAX_Y/2);
 	enum InnerRingState state = (distanceFromCenterSquared < norm2(200, 0)) ? INNER_RING_INSIDE : INNER_RING_OUTSIDE;
-	if (state == innerRingStates[haptic]) {
-		return;
-	}
 	innerRingStates[haptic] = state;
-	Note* note = &trackpadNotes[haptic];
-	note->duration = (state == INNER_RING_INSIDE) ? 50 : 35; // ms, 0-65535
-	note->dutyCycle = 31; // ??, 0-255
-	note->pulseFreq = (state == INNER_RING_INSIDE) ? 160 : 128; // Hz, 0-65535
-	playHaptic(haptic, note, 1);
+
+	if (state != innerRingStates[haptic] || notch != lastNotch) {
+		bool loud = (state == INNER_RING_INSIDE); // || (notch != lastNotch);
+		Note* note = &trackpadNotes[haptic];
+		note->duration = loud ? 50 : 35; // ms, 0-65535
+		note->dutyCycle = 31; // ??, 0-255
+		note->pulseFreq = loud ? 160 : 128; // Hz, 0-65535
+		playHaptic(haptic, note, 1);
+	}
 }
 
 /**
@@ -1363,20 +1380,16 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	lastXY[trackpad].y = *yLoc;
 
 	// If trackpad has moved significantly since last time, then play haptic.
-	uint32_t threshold = norm2(10, 0);
+	uint32_t threshold = norm2(3, 0);
 	if (norm2(lastX, *xLoc) > threshold || norm2(lastY, *yLoc) > threshold) {
-		Haptic haptic;
 		switch (trackpad) {
 			case L_TRACKPAD:
-				haptic = L_HAPTIC;
+				playTrackpadHaptic(L_HAPTIC, *xLoc, *yLoc);
 				break;
 			case R_TRACKPAD:
-				haptic = R_HAPTIC;
+				playTrackpadHaptic(R_HAPTIC, *xLoc, *yLoc);
 				break;
-			default:
-				return true;
 		}
-		playTrackpadHaptic(haptic, *xLoc, *yLoc);
 	}
 
 	return true;
@@ -1845,8 +1858,8 @@ void trackpadCmdUsage(void) {
 void tpadMonitor(void) {
 	printf("Trackpad X/Y Location (Press any key to exit):\n");
 	printf("\n");
-	printf("Time             Left X Left Y Right X Right Y\n");
-	printf("----------------------------------------------\n");
+	printf("Time             Left X Left Y LNotch  Right X Right Y RNotch \n");
+	printf("--------------------------------------------------------------\n");
 
 	while (!usb_tstc()) {
 		uint16_t x_loc = 0;
@@ -1861,11 +1874,13 @@ void tpadMonitor(void) {
 
 		printf("  %4d ", x_loc);
 		printf("  %4d ", y_loc);
+		printf("(%2d/%2d) ", notchStates[L_TRACKPAD], NUM_NOTCHES);
 
 		trackpadGetLastXY(R_TRACKPAD, &x_loc, &y_loc);
 
 		printf("   %4d ", x_loc);
 		printf("   %4d ", y_loc);
+		printf("(%2d/%2d) ", notchStates[R_TRACKPAD], NUM_NOTCHES);
 
 		printf(" %4d %4d", tpadAdcDatas[R_TRACKPAD][18], tpadAdcDatas[L_TRACKPAD][18]);
 
