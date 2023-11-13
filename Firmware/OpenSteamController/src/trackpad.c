@@ -852,24 +852,42 @@ void trackpadLocUpdate(Trackpad trackpad) {
 		TPAD_SYSCFG1_ANYMEASEN_BIT | TPAD_SYSCFG1_TRACKDIS_BIT);
 }
 
+typedef struct {
+	uint16_t x;
+	uint16_t y;
+} Loc;
+
 uint32_t norm2(uint16_t lhs, uint16_t rhs) {
 	uint32_t diff = lhs >= rhs ? lhs - rhs : rhs - lhs;
 	return diff * diff;
 }
 
-static struct { uint16_t x; uint16_t y; } lastXY[] = { {0, 0}, {0, 0} };
-static Note trackpadNotes[2] = { {0, 0, 0, 0}, {0, 0, 0, 0} };
+static Loc lastXY[] = {
+	[L_TRACKPAD] = { .x = 0, .y = 0, },
+	[R_TRACKPAD] = { .x = 0, .y = 0, },
+};
+static Note trackpadNotes[2] = {
+	[L_TRACKPAD] = {0, 0, 0, 0},
+	[R_TRACKPAD] = {0, 0, 0, 0},
+};
 enum InnerRingState {
 	INNER_RING_UNSET,
 	INNER_RING_INSIDE,
 	INNER_RING_OUTSIDE,
 };
-static enum InnerRingState innerRingStates[2] = { INNER_RING_UNSET, INNER_RING_UNSET };
+static enum InnerRingState innerRingStates[2] = {
+	[L_TRACKPAD] = INNER_RING_UNSET,
+	[R_TRACKPAD] = INNER_RING_UNSET,
+};
 
 const double PI = 3.1415926;
-const uint32_t NUM_NOTCHES = 8; // 16;
+const uint32_t NUM_NOTCHES = 8;
+// const uint32_t NUM_NOTCHES = 16;
 typedef uint32_t Notch;
-static Notch notchStates[2] = { 0, 0 };
+static Notch notchStates[2] = {
+	[L_TRACKPAD] = 0,
+	[R_TRACKPAD] = 0,
+};
 
 void resetTrackpadHaptic(Trackpad trackpad) {
 	switch (trackpad) {
@@ -882,12 +900,12 @@ void resetTrackpadHaptic(Trackpad trackpad) {
 	}
 }
 
-void playTrackpadHaptic(enum Haptic haptic, uint16_t tpadX, uint16_t tpadY) {
+void playTrackpadHaptic(enum Haptic haptic, Loc loc) {
 	if (isHapticBusy(haptic)) {
 		return;
 	}
 
-	double angle = atan2(tpadY - TPAD_MAX_Y/2, tpadX - TPAD_MAX_X/2);
+	double angle = atan2(loc.y - TPAD_MAX_Y/2, loc.x - TPAD_MAX_X/2);
 	// Normalize the angle to the range [0, 2*PI)
     angle = fmod(angle, 2 * PI);
     if (angle < 0) {
@@ -897,7 +915,7 @@ void playTrackpadHaptic(enum Haptic haptic, uint16_t tpadX, uint16_t tpadY) {
 	Notch lastNotch = notchStates[haptic];
 	notchStates[haptic] = notch;
 
-	uint32_t distanceFromCenterSquared = norm2(tpadX, TPAD_MAX_X/2) + norm2(tpadY, TPAD_MAX_Y/2);
+	uint32_t distanceFromCenterSquared = norm2(loc.x, TPAD_MAX_X/2) + norm2(loc.y, TPAD_MAX_Y/2);
 	enum InnerRingState state = (distanceFromCenterSquared < norm2(200, 0)) ? INNER_RING_INSIDE : INNER_RING_OUTSIDE;
 	innerRingStates[haptic] = state;
 
