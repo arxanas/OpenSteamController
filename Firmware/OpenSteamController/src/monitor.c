@@ -61,7 +61,7 @@ void monitorCmdUsage(void) {
  */
 int monitorCmdFnc(int argc, const char* argv[]) {
 	// Sequence to clear terminal (as we will be updating more than one line...)
-	const char const clr[] = {27, '[', '2', 'J', 0};
+	const char clr[] = {27, '[', '2', 'J', 0};
 
 	const char empty_x_str[10] = "         ";
 

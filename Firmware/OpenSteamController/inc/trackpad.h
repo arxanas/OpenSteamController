@@ -42,6 +42,10 @@ typedef enum Trackpad_t {
 #define TPAD_MAX_X (1200) //!< Defines range for Trackpad X Location.
 #define TPAD_MAX_Y (700) //!< Defines range for Trackpad Y Location.
 
+// Debugging.
+#define DUMP_TRACKPAD_AMPLITUDES (0)
+// #define DUMP_TRACKPAD_AMPLITUDES (1)
+
 void initTrackpad(void);
 
 void trackpadLocUpdate(Trackpad trackpad);

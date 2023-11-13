@@ -911,6 +911,113 @@ void playTrackpadHaptic(enum Haptic haptic, uint16_t tpadX, uint16_t tpadY) {
 	}
 }
 
+typedef struct {
+	int32_t x;
+	int32_t y;
+} Amplitude;
+#if (DUMP_TRACKPAD_AMPLITUDES == 1)
+// This will make the numbers easier to read, as they flicker frequently.
+#define NUM_HISTORICAL_TRACKPAD_AMPLITUDES (50)
+#else
+#define NUM_HISTORICAL_TRACKPAD_AMPLITUDES (3)
+#endif
+static Amplitude historicalTrackpadAmplitudes[2][NUM_HISTORICAL_TRACKPAD_AMPLITUDES] = {};
+static uint8_t historicalTrackpadIndexes[2] = {0, 0};
+
+static void pushAmplitude(Trackpad trackpad, Amplitude amplitude) {
+	historicalTrackpadAmplitudes[trackpad][historicalTrackpadIndexes[trackpad]] = amplitude;
+	historicalTrackpadIndexes[trackpad] = (historicalTrackpadIndexes[trackpad] + 1) % NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
+}
+
+static Amplitude getAverageAmplitude(Trackpad trackpad) {
+	Amplitude amplitude = {0, 0};
+
+	for (int i = 0; i < NUM_HISTORICAL_TRACKPAD_AMPLITUDES; i++) {
+		amplitude.x += historicalTrackpadAmplitudes[trackpad][i].x;
+		amplitude.y += historicalTrackpadAmplitudes[trackpad][i].y;
+	}
+
+	amplitude.x /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
+	amplitude.y /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
+
+	return amplitude;
+}
+
+typedef struct {
+	double a; // x^2
+	double b; // x
+	double c; // 1
+} CurveCoeffs;
+typedef struct {
+	CurveCoeffs x;
+	CurveCoeffs y;
+} TrackpadCoeffs;
+static const TrackpadCoeffs COEFFICIENTS[2] = {
+	[L_TRACKPAD] = {
+		.x = {
+			.a = -4.45e-3,
+			.b = 5.03,
+			.c = 1542.0,
+		},
+		.y = {
+			.a = -2.93e-3,
+			.b = 3.12,
+			.c = 2635.0,
+		},
+	},
+	[R_TRACKPAD] = {
+		.x = {
+			.a = -3.99e-3,
+			.b = 4.74,
+			.c = 1862.0,
+		},
+		.y = {
+			.a = -2.65e-3,
+			.b = 2.53,
+			.c = 2621,
+		}
+	},
+};
+static uint32_t solveCurve(const CurveCoeffs* coeffs, uint32_t amplitude) {
+	// Solve equation of the form ax^2 + bx + c = amplitude; take the higher root.
+	double a = coeffs->a;
+	double b = coeffs->b;
+	double c = coeffs->c + amplitude;
+
+	double discriminant = b*b - 4*a*c;
+
+	double root1 = (-b + sqrt(discriminant)) / (2*a);
+	double root2 = (-b - sqrt(discriminant)) / (2*a);
+
+	return (uint32_t) (root1 >= root2 ? root1 : root2);
+}
+static Amplitude normalizeAmplitude(Trackpad trackpad, Amplitude amplitude) {
+	Amplitude normalizedAmplitude = {
+		.x = solveCurve(&COEFFICIENTS[trackpad].x, amplitude.x),
+		.y = solveCurve(&COEFFICIENTS[trackpad].y, amplitude.y),
+	};
+	return normalizedAmplitude;
+}
+
+typedef struct {
+	uint32_t x;
+	uint32_t y;
+} Threshold;
+static const Threshold THRESHOLDS[2] = {
+	[L_TRACKPAD] = {
+		.x = 1425,
+		.y = 1680,
+	},
+	[R_TRACKPAD] = {
+		.x = 1560,
+		.y = 1645,
+	},
+};
+static bool isFingerDown(Trackpad trackpad, Amplitude amplitude) {
+	const Threshold* threshold = &THRESHOLDS[trackpad];
+	return amplitude.x > threshold->x || amplitude.y > threshold->y;
+}
+
 /**
  * Convert the last updated AnyMeas ADC values to X/Y location. If update to
  *  AnyMeas ADC values has been requested (i.e. via trackpadLocUpdate()), this
@@ -1196,27 +1303,6 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	while (tpadAdcIdxs[trackpad] < NUM_ANYMEAS_ADCS) {
 	}
 
-	// Empirically-determined value. See
-	// https://github.com/greggersaurus/OpenSteamController/issues/7. This
-	// can be adjusted if you find that the trackpad is not accurately
-	// detecting the finger being down.
-	//
-	// The relative distance of the finger from the touchpad is determined by
-	// examining the amplitude of the sine wave. Higher values mean that the
-	// finger is closer. I got best results at around ~500, so I set this value
-	// to the closest power of 2.
-	//
-	// - If this threshold is too low, then the finger being close to (but not
-	//   touching) the trackpad will register.
-	// - If this threshold is too high, then only heavier touches will
-	//   register.
-	const int FINGER_DOWN_REQUIRED_AMPLITUDE = 512;
-
-	// Early exit if no finger down detected in X position calculation
-	if (x_pos < 0 || max_amplitude_x < FINGER_DOWN_REQUIRED_AMPLITUDE) {
-		return false;
-	}
-
 	// Calculate yLoc
 	int32_t adc_vals_y[8];
 
@@ -1290,7 +1376,12 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	adc_vals_y[6] -= compensated_val;
 	adc_vals_y[7] += compensated_val;
 
+	int32_t max_amplitude_y = 0;
 	for (int idx = 0; idx < 8; idx++) {
+		int32_t diff = adc_vals_y[idx+1] - adc_vals_y[idx];
+		int32_t diff_abs = abs(diff);
+		max_amplitude_y = diff_abs > max_amplitude_y ? diff_abs : max_amplitude_y;
+
 		if (adc_vals_y[idx] < 0)
 			adc_vals_y[idx] = 0;
 		adc_vals_y[idx] = 1250 * adc_vals_y[idx] / 1000;
@@ -1305,6 +1396,24 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	}
 	printf("\n");
 	*/
+
+	pushAmplitude(trackpad, (Amplitude){
+		.x = max_amplitude_x,
+		.y = max_amplitude_y,
+	});
+	Amplitude averageAmplitude = getAverageAmplitude(trackpad);
+	Amplitude normalizedAmplitude = normalizeAmplitude(trackpad, averageAmplitude);
+	bool fingerDown = isFingerDown(trackpad, normalizedAmplitude);
+	if (DUMP_TRACKPAD_AMPLITUDES) {
+		printf("Trackpad: %s\t", (trackpad == L_TRACKPAD ? "left" : "right"));
+		printf("Max ampl. X: %4d\tY: %4d\t", averageAmplitude.x, averageAmplitude.y);
+		printf("Norm. ampl. X: %4d\t Y: %4d\t", normalizedAmplitude.x, normalizedAmplitude.y);
+		printf("Is down: %d\n", fingerDown);
+	} else {
+		if (!fingerDown) {
+			return false;
+		}
+	}
 
 	transition_state = WAIT_FOR_0_TO_P;
 
@@ -1862,24 +1971,28 @@ void tpadMonitor(void) {
 	printf("--------------------------------------------------------------\n");
 
 	while (!usb_tstc()) {
-		uint16_t x_loc = 0;
-		uint16_t y_loc = 0;
+		printf("\033[2J"); // clear terminal
+		printf("\033[H"); // move cursor to home position
 
 		trackpadLocUpdate(L_TRACKPAD);
 		trackpadLocUpdate(R_TRACKPAD);
 
+		uint16_t lx_loc = 0;
+		uint16_t ly_loc = 0;
+		uint16_t rx_loc = 0;
+		uint16_t ry_loc = 0;
+		// These may print debug info as side effects (!).
+		trackpadGetLastXY(L_TRACKPAD, &lx_loc, &ly_loc);
+		trackpadGetLastXY(R_TRACKPAD, &rx_loc, &ry_loc);
+
 		printf("0x%08x       ", getUsTickCnt());
 
-		trackpadGetLastXY(L_TRACKPAD, &x_loc, &y_loc);
-
-		printf("  %4d ", x_loc);
-		printf("  %4d ", y_loc);
+		printf("  %4d ", lx_loc);
+		printf("  %4d ", ly_loc);
 		printf("(%2d/%2d) ", notchStates[L_TRACKPAD], NUM_NOTCHES);
 
-		trackpadGetLastXY(R_TRACKPAD, &x_loc, &y_loc);
-
-		printf("   %4d ", x_loc);
-		printf("   %4d ", y_loc);
+		printf("   %4d ", rx_loc);
+		printf("   %4d ", ry_loc);
 		printf("(%2d/%2d) ", notchStates[R_TRACKPAD], NUM_NOTCHES);
 
 		printf(" %4d %4d", tpadAdcDatas[R_TRACKPAD][18], tpadAdcDatas[L_TRACKPAD][18]);
