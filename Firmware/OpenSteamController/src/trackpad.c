@@ -947,12 +947,14 @@ static void pushAmplitude(Trackpad trackpad, Amplitude amplitude) {
 	historicalTrackpadIndexes[trackpad] = (historicalTrackpadIndexes[trackpad] + 1) % NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
 }
 
-static Amplitude getAverageAmplitude(Trackpad trackpad) {
-	Amplitude amplitude = {0, 0};
+static Amplitude denoiseAmplitude(Trackpad trackpad) {
+	Amplitude amplitude = { .x = 0, .y = 0 };
 
 	for (int i = 0; i < NUM_HISTORICAL_TRACKPAD_AMPLITUDES; i++) {
-		amplitude.x += historicalTrackpadAmplitudes[trackpad][i].x;
-		amplitude.y += historicalTrackpadAmplitudes[trackpad][i].y;
+		int32_t x = historicalTrackpadAmplitudes[trackpad][i].x;
+		int32_t y = historicalTrackpadAmplitudes[trackpad][i].y;
+		amplitude.x = (x < amplitude.x) ? x : amplitude.x;
+		amplitude.y = (y < amplitude.y) ? y : amplitude.y;
 	}
 
 	amplitude.x /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
@@ -965,6 +967,7 @@ typedef struct {
 	double a; // x^2
 	double b; // x
 	double c; // 1
+	double max; // y value at top of curve
 } CurveCoeffs;
 typedef struct {
 	CurveCoeffs x;
@@ -976,11 +979,13 @@ static const TrackpadCoeffs COEFFICIENTS[2] = {
 			.a = -4.45e-3,
 			.b = 5.03,
 			.c = 1542.0,
+			.max = 3170.0,
 		},
 		.y = {
 			.a = -2.93e-3,
 			.b = 3.12,
 			.c = 2635.0,
+			.max = 3610.0,
 		},
 	},
 	[R_TRACKPAD] = {
@@ -988,31 +993,27 @@ static const TrackpadCoeffs COEFFICIENTS[2] = {
 			.a = -3.99e-3,
 			.b = 4.74,
 			.c = 1862.0,
+			.max = 3120.0,
 		},
 		.y = {
 			.a = -2.65e-3,
 			.b = 2.53,
 			.c = 2621,
+			.max = 3200.0,
 		}
 	},
 };
-static uint32_t solveCurve(const CurveCoeffs* coeffs, uint32_t amplitude) {
-	// Solve equation of the form ax^2 + bx + c = amplitude; take the higher root.
-	double a = coeffs->a;
-	double b = coeffs->b;
-	double c = coeffs->c + amplitude;
 
-	double discriminant = b*b - 4*a*c;
-
-	double root1 = (-b + sqrt(discriminant)) / (2*a);
-	double root2 = (-b - sqrt(discriminant)) / (2*a);
-
-	return (uint32_t) (root1 >= root2 ? root1 : root2);
+static int32_t getThreshold(const CurveCoeffs* coeffs, uint16_t loc) {
+	double x = (double)loc;
+	double y = coeffs->a * x * x + coeffs->b * x + coeffs->c;
+	return (int32_t)(y);
 }
-static Amplitude normalizeAmplitude(Trackpad trackpad, Amplitude amplitude) {
+
+static Amplitude normalizeAmplitude(Trackpad trackpad, Amplitude amplitude, Loc loc) {
 	Amplitude normalizedAmplitude = {
-		.x = solveCurve(&COEFFICIENTS[trackpad].x, amplitude.x),
-		.y = solveCurve(&COEFFICIENTS[trackpad].y, amplitude.y),
+		.x = amplitude.x - getThreshold(&COEFFICIENTS[trackpad].x, loc.x),
+		.y = amplitude.y - getThreshold(&COEFFICIENTS[trackpad].y, loc.y),
 	};
 	return normalizedAmplitude;
 }
@@ -1032,8 +1033,10 @@ static const Threshold THRESHOLDS[2] = {
 	},
 };
 static bool isFingerDown(Trackpad trackpad, Amplitude amplitude) {
-	const Threshold* threshold = &THRESHOLDS[trackpad];
-	return amplitude.x > threshold->x || amplitude.y > threshold->y;
+	const int THRESHOLD = 64;
+	return amplitude.x > THRESHOLD || amplitude.y > THRESHOLD;
+	// const Threshold* threshold = &THRESHOLDS[trackpad];
+	// return amplitude.x > threshold->x || amplitude.y > threshold->y;
 }
 
 /**
@@ -1415,24 +1418,6 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	printf("\n");
 	*/
 
-	pushAmplitude(trackpad, (Amplitude){
-		.x = max_amplitude_x,
-		.y = max_amplitude_y,
-	});
-	Amplitude averageAmplitude = getAverageAmplitude(trackpad);
-	Amplitude normalizedAmplitude = normalizeAmplitude(trackpad, averageAmplitude);
-	bool fingerDown = isFingerDown(trackpad, normalizedAmplitude);
-	if (DUMP_TRACKPAD_AMPLITUDES) {
-		printf("Trackpad: %s\t", (trackpad == L_TRACKPAD ? "left" : "right"));
-		printf("Max ampl. X: %4d\tY: %4d\t", averageAmplitude.x, averageAmplitude.y);
-		printf("Norm. ampl. X: %4d\t Y: %4d\t", normalizedAmplitude.x, normalizedAmplitude.y);
-		printf("Is down: %d\n", fingerDown);
-	} else {
-		if (!fingerDown) {
-			return false;
-		}
-	}
-
 	transition_state = WAIT_FOR_0_TO_P;
 
 	// Checking for finger down based on logic detailed above
@@ -1493,6 +1478,25 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	if (x_pos == -1 && y_pos == -1) {
 		return false;
 	}
+	pushAmplitude(trackpad, (Amplitude){
+		.x = max_amplitude_x,
+		.y = max_amplitude_y,
+	});
+	Amplitude averageAmplitude = denoiseAmplitude(trackpad);
+	Amplitude normalizedAmplitude = normalizeAmplitude(trackpad, averageAmplitude, (Loc){
+		.x = x_pos,
+		.y = y_pos,
+	});
+	bool fingerDown = isFingerDown(trackpad, normalizedAmplitude);
+	if (DUMP_TRACKPAD_AMPLITUDES) {
+		printf("Trackpad: %s\t", (trackpad == L_TRACKPAD ? "left" : "right"));
+		printf("Max ampl. X: %4d\tY: %4d\t", averageAmplitude.x, averageAmplitude.y);
+		printf("Norm. ampl. X: %4d\t Y: %4d\t", normalizedAmplitude.x, normalizedAmplitude.y);
+		printf("Is down: %d\n", fingerDown);
+	}
+	if (!DUMP_TRACKPAD_AMPLITUDES && !fingerDown) {
+		return false;
+	}
 	// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
 	// Compensate for the dead zone at the top of the touchpad.
 	x_pos = x_pos == -1 ? 0 : x_pos;
@@ -1509,12 +1513,13 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	// If trackpad has moved significantly since last time, then play haptic.
 	uint32_t threshold = norm2(3, 0);
 	if (norm2(lastX, *xLoc) > threshold || norm2(lastY, *yLoc) > threshold) {
+		Loc loc = (Loc){ .x = *xLoc, .y = *yLoc };
 		switch (trackpad) {
 			case L_TRACKPAD:
-				playTrackpadHaptic(L_HAPTIC, *xLoc, *yLoc);
+				playTrackpadHaptic(L_HAPTIC, loc);
 				break;
 			case R_TRACKPAD:
-				playTrackpadHaptic(R_HAPTIC, *xLoc, *yLoc);
+				playTrackpadHaptic(R_HAPTIC, loc);
 				break;
 		}
 	}
@@ -1989,8 +1994,8 @@ void tpadMonitor(void) {
 	printf("--------------------------------------------------------------\n");
 
 	while (!usb_tstc()) {
-		printf("\033[2J"); // clear terminal
-		printf("\033[H"); // move cursor to home position
+		// printf("\033[2J"); // clear terminal
+		// printf("\033[H"); // move cursor to home position
 
 		trackpadLocUpdate(L_TRACKPAD);
 		trackpadLocUpdate(R_TRACKPAD);
@@ -2003,19 +2008,18 @@ void tpadMonitor(void) {
 		trackpadGetLastXY(L_TRACKPAD, &lx_loc, &ly_loc);
 		trackpadGetLastXY(R_TRACKPAD, &rx_loc, &ry_loc);
 
-		printf("0x%08x       ", getUsTickCnt());
+		// printf("0x%08x       ", getUsTickCnt());
 
-		printf("  %4d ", lx_loc);
-		printf("  %4d ", ly_loc);
-		printf("(%2d/%2d) ", notchStates[L_TRACKPAD], NUM_NOTCHES);
+		// printf("  %4d ", lx_loc);
+		// printf("  %4d ", ly_loc);
+		// printf("(%2d/%2d) ", notchStates[L_TRACKPAD], NUM_NOTCHES);
 
-		printf("   %4d ", rx_loc);
-		printf("   %4d ", ry_loc);
-		printf("(%2d/%2d) ", notchStates[R_TRACKPAD], NUM_NOTCHES);
+		// printf("   %4d ", rx_loc);
+		// printf("   %4d ", ry_loc);
+		// printf("(%2d/%2d) ", notchStates[R_TRACKPAD], NUM_NOTCHES);
 
-		printf(" %4d %4d", tpadAdcDatas[R_TRACKPAD][18], tpadAdcDatas[L_TRACKPAD][18]);
+		// printf(" %4d %4d\n", tpadAdcDatas[R_TRACKPAD][18], tpadAdcDatas[L_TRACKPAD][18]);
 
-		printf("\r");
 		usb_flush();
 
 		usleep(10 * 1000);
