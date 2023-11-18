@@ -42,9 +42,31 @@ typedef enum Trackpad_t {
 #define TPAD_MAX_X (1200) //!< Defines range for Trackpad X Location.
 #define TPAD_MAX_Y (700) //!< Defines range for Trackpad Y Location.
 
-// Debugging.
-#define DUMP_TRACKPAD_AMPLITUDES (0)
-// #define DUMP_TRACKPAD_AMPLITUDES (1)
+// Debugging. Dump amplitude information to the console (using `trackpad
+// monitor`). This should be disabled for normal operation.
+// #define DEBUG_DUMP_TRACKPAD_AMPLITUDES
+
+// The number of historical amplitudes to observe for denoising:
+#define NUM_HISTORICAL_TRACKPAD_AMPLITUDES (3)
+// #define NUM_HISTORICAL_TRACKPAD_AMPLITUDES (50)
+
+// The method to use for denoising trackpad amplitude input.
+enum DenoiseMethod_t {
+	// Take average to try to produce reliable amplitude figure (in the presence
+	// of variable finger pressure).
+	DENOISE_METHOD_AVERAGE = 1,
+    // Take minimums to try to reduce impact of random spikes.
+	DENOISE_METHOD_MINIMUM = 2
+};
+// #define DENOISE_METHOD ((enum DenoiseMethod_t) DENOISE_METHOD_MINIMUM)
+#define DENOISE_METHOD ((enum DenoiseMethod_t) DENOISE_METHOD_AVERAGE)
+
+// The number of "virtual notches" to use. The trackpad is divided into this
+// many regions of equal angle. When the trackpad location passes into a
+// different region, haptic feedback is triggered. This mimics the "notches"
+// that appear on the edges a GameCube controller's joystick's housing.
+#define NUM_VIRTUAL_NOTCHES (8)
+// #define NUM_VIRTUAL_NOTCHES (16)
 
 void initTrackpad(void);
 

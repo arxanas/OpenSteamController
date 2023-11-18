@@ -881,8 +881,6 @@ static enum InnerRingState innerRingStates[2] = {
 };
 
 const double PI = 3.1415926;
-const uint32_t NUM_NOTCHES = 8;
-// const uint32_t NUM_NOTCHES = 16;
 typedef uint32_t Notch;
 static Notch notchStates[2] = {
 	[L_TRACKPAD] = 0,
@@ -911,7 +909,7 @@ void playTrackpadHaptic(enum Haptic haptic, Loc loc) {
     if (angle < 0) {
         angle += 2 * PI;
     }
-	Notch notch = (Notch)(angle / ((2 * PI) / NUM_NOTCHES));
+	Notch notch = (Notch)(angle / ((2 * PI) / NUM_VIRTUAL_NOTCHES));
 	Notch lastNotch = notchStates[haptic];
 	notchStates[haptic] = notch;
 
@@ -933,12 +931,6 @@ typedef struct {
 	int32_t x;
 	int32_t y;
 } Amplitude;
-#if (DUMP_TRACKPAD_AMPLITUDES == 1)
-// This will make the numbers easier to read, as they flicker frequently.
-#define NUM_HISTORICAL_TRACKPAD_AMPLITUDES (50)
-#else
-#define NUM_HISTORICAL_TRACKPAD_AMPLITUDES (3)
-#endif
 static Amplitude historicalTrackpadAmplitudes[2][NUM_HISTORICAL_TRACKPAD_AMPLITUDES] = {};
 static uint8_t historicalTrackpadIndexes[2] = {0, 0};
 
@@ -948,95 +940,139 @@ static void pushAmplitude(Trackpad trackpad, Amplitude amplitude) {
 }
 
 static Amplitude denoiseAmplitude(Trackpad trackpad) {
-	Amplitude amplitude = { .x = 0, .y = 0 };
-
-	for (int i = 0; i < NUM_HISTORICAL_TRACKPAD_AMPLITUDES; i++) {
-		int32_t x = historicalTrackpadAmplitudes[trackpad][i].x;
-		int32_t y = historicalTrackpadAmplitudes[trackpad][i].y;
-		amplitude.x = (x < amplitude.x) ? x : amplitude.x;
-		amplitude.y = (y < amplitude.y) ? y : amplitude.y;
+	switch (DENOISE_METHOD) {
+		case DENOISE_METHOD_MINIMUM: {
+			Amplitude amplitude = historicalTrackpadAmplitudes[trackpad][0];
+			for (int i = 0; i < NUM_HISTORICAL_TRACKPAD_AMPLITUDES; i++) {
+				int32_t x = historicalTrackpadAmplitudes[trackpad][i].x;
+				int32_t y = historicalTrackpadAmplitudes[trackpad][i].y;
+				amplitude.x = (x < amplitude.x) ? x : amplitude.x;
+				amplitude.y = (y < amplitude.y) ? y : amplitude.y;
+			}
+			return amplitude;
+		}
+		case DENOISE_METHOD_AVERAGE: {
+			Amplitude amplitude = { .x = 0, .y = 0 };
+			for (int i = 0; i < NUM_HISTORICAL_TRACKPAD_AMPLITUDES; i++) {
+				amplitude.x += historicalTrackpadAmplitudes[trackpad][i].x;
+				amplitude.y += historicalTrackpadAmplitudes[trackpad][i].y;
+			}
+			amplitude.x /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
+			amplitude.y /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
+			return amplitude;
+		}
 	}
-
-	amplitude.x /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
-	amplitude.y /= NUM_HISTORICAL_TRACKPAD_AMPLITUDES;
-
-	return amplitude;
 }
 
 typedef struct {
-	double a; // x^2
+	double a; // 1
 	double b; // x
-	double c; // 1
-	double max; // y value at top of curve
+	double c; // y
+	double d; // x^2
+	double e; // y^2
+	double f; // xy
 } CurveCoeffs;
 typedef struct {
 	CurveCoeffs x;
-	CurveCoeffs y;
+	// CurveCoeffs y; // poor predictive power, unused
 } TrackpadCoeffs;
 static const TrackpadCoeffs COEFFICIENTS[2] = {
 	[L_TRACKPAD] = {
 		.x = {
-			.a = -4.45e-3,
-			.b = 5.03,
-			.c = 1542.0,
-			.max = 3170.0,
-		},
-		.y = {
-			.a = -2.93e-3,
-			.b = 3.12,
-			.c = 2635.0,
-			.max = 3610.0,
+			.a = -4.76e2,
+			.b = 3.88e0,
+			.c = 9.72e0,
+			.d = -3.03e-3,
+			.e = -1.44e-2,
+			.f = 1.18e-3,
 		},
 	},
 	[R_TRACKPAD] = {
+		// TODO: these are just copied from above, calculate actual values
 		.x = {
-			.a = -3.99e-3,
-			.b = 4.74,
-			.c = 1862.0,
-			.max = 3120.0,
+			.a = -4.76e2,
+			.b = 3.88e0,
+			.c = 9.72e0,
+			.d = -3.03e-3,
+			.e = -1.44e-2,
+			.f = 1.18e-3,
 		},
-		.y = {
-			.a = -2.65e-3,
-			.b = 2.53,
-			.c = 2621,
-			.max = 3200.0,
-		}
 	},
 };
 
-static int32_t getThreshold(const CurveCoeffs* coeffs, uint16_t loc) {
-	double x = (double)loc;
-	double y = coeffs->a * x * x + coeffs->b * x + coeffs->c;
-	return (int32_t)(y);
+typedef struct {
+	Loc loc;
+	Amplitude amplitude;
+} LocAmplitude;
+
+#define NUM_AMPLITUDE_SAMPLES 193
+#define DATA(xval,yval,xampl,yampl) { { xval, yval }, { xampl, yampl } },
+static LocAmplitude LOC_AMPLITUDES[NUM_AMPLITUDE_SAMPLES] = {
+	// @nocommit should store the trackpad
+	// information in the data itself and filter on that later
+#include "amplitude_samples.inc"
+};
+#undef DATA
+
+#define NUM_NEAREST_NEIGHBORS 5
+typedef struct {
+	LocAmplitude elems[NUM_NEAREST_NEIGHBORS];
+} NearestNeighbors;
+
+NearestNeighbors nearestNeighbors(Trackpad trackpad, Loc loc) {
+	NearestNeighbors nearestNeighbors = {0};
+	uint32_t minDistances[NUM_NEAREST_NEIGHBORS] = {0};
+	for (int i = 0; i < NUM_AMPLITUDE_SAMPLES; i++) {
+		uint32_t distance = norm2(loc.x, LOC_AMPLITUDES[i].loc.x) + norm2(loc.y, LOC_AMPLITUDES[i].loc.y);
+		if (i < NUM_NEAREST_NEIGHBORS) {
+			minDistances[i] = distance;
+			nearestNeighbors.elems[i] = LOC_AMPLITUDES[i];
+			continue;
+		}
+		for (int j = 0; j < NUM_NEAREST_NEIGHBORS; j++) {
+			if (distance < minDistances[j]) {
+				minDistances[j] = distance;
+				nearestNeighbors.elems[j] = LOC_AMPLITUDES[i];
+				break;
+			}
+		}
+	}
+
+	return nearestNeighbors;
+}
+
+static int32_t getThreshold(const CurveCoeffs* coeffs, Loc loc) {
+	// @nocommit handle right trackpad
+	NearestNeighbors neighbors = nearestNeighbors(L_TRACKPAD, loc);
+	uint32_t average = 0;
+	for (int i = 0; i < NUM_NEAREST_NEIGHBORS; i++) {
+		// @nocommit explain why no y
+		average += neighbors.elems[i].amplitude.x;
+	}
+	average /= NUM_NEAREST_NEIGHBORS;
+	return (int32_t)(average);
+	// uint16_t x = loc.x;
+	// uint16_t y = loc.y;
+	// double value = coeffs->a
+	// 			 + (coeffs->b * x) + (coeffs->c * y)
+	// 			 + (coeffs->d * x * x) + (coeffs->e * y * y) + (coeffs->f * x * y);
+	// return (int32_t)(value);
 }
 
 static Amplitude normalizeAmplitude(Trackpad trackpad, Amplitude amplitude, Loc loc) {
+	// NOTE: Use only the x-curve as the y-curve has poor predictive power.
+	const CurveCoeffs* coeffs = &COEFFICIENTS[trackpad].x;
+	int32_t xAmplitude = amplitude.x - getThreshold(coeffs, loc);
 	Amplitude normalizedAmplitude = {
-		.x = amplitude.x - getThreshold(&COEFFICIENTS[trackpad].x, loc.x),
-		.y = amplitude.y - getThreshold(&COEFFICIENTS[trackpad].y, loc.y),
+		.x = xAmplitude,
+		.y = xAmplitude,
 	};
 	return normalizedAmplitude;
 }
 
-typedef struct {
-	uint32_t x;
-	uint32_t y;
-} Threshold;
-static const Threshold THRESHOLDS[2] = {
-	[L_TRACKPAD] = {
-		.x = 1425,
-		.y = 1680,
-	},
-	[R_TRACKPAD] = {
-		.x = 1560,
-		.y = 1645,
-	},
-};
 static bool isFingerDown(Trackpad trackpad, Amplitude amplitude) {
-	const int THRESHOLD = 64;
-	return amplitude.x > THRESHOLD || amplitude.y > THRESHOLD;
-	// const Threshold* threshold = &THRESHOLDS[trackpad];
-	// return amplitude.x > threshold->x || amplitude.y > threshold->y;
+	const int THRESHOLD = 768; // TODO: adjust
+	return amplitude.x + THRESHOLD > 0 && amplitude.y + THRESHOLD > 0;
 }
 
 /**
@@ -1474,33 +1510,42 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 		}
 	}
 
-	// Update outputs if finger was down (i.e. x_pos and y_pos are both valid)
+	// Update outputs only if finger was down (i.e. x_pos and y_pos are both valid)
 	if (x_pos == -1 && y_pos == -1) {
-		return false;
-	}
-	pushAmplitude(trackpad, (Amplitude){
-		.x = max_amplitude_x,
-		.y = max_amplitude_y,
-	});
-	Amplitude averageAmplitude = denoiseAmplitude(trackpad);
-	Amplitude normalizedAmplitude = normalizeAmplitude(trackpad, averageAmplitude, (Loc){
-		.x = x_pos,
-		.y = y_pos,
-	});
-	bool fingerDown = isFingerDown(trackpad, normalizedAmplitude);
-	if (DUMP_TRACKPAD_AMPLITUDES) {
-		printf("Trackpad: %s\t", (trackpad == L_TRACKPAD ? "left" : "right"));
-		printf("Max ampl. X: %4d\tY: %4d\t", averageAmplitude.x, averageAmplitude.y);
-		printf("Norm. ampl. X: %4d\t Y: %4d\t", normalizedAmplitude.x, normalizedAmplitude.y);
-		printf("Is down: %d\n", fingerDown);
-	}
-	if (!DUMP_TRACKPAD_AMPLITUDES && !fingerDown) {
 		return false;
 	}
 	// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
 	// Compensate for the dead zone at the top of the touchpad.
 	x_pos = x_pos == -1 ? 0 : x_pos;
 	y_pos = y_pos == -1 ? TPAD_MAX_Y : y_pos;
+	pushAmplitude(trackpad, (Amplitude){
+		.x = max_amplitude_x,
+		.y = max_amplitude_y,
+	});
+
+	Amplitude denoisedAmplitude = denoiseAmplitude(trackpad);
+	Amplitude normalizedAmplitude = normalizeAmplitude(trackpad, denoisedAmplitude, (Loc){
+		.x = x_pos,
+		.y = y_pos,
+	});
+	bool fingerDown = // isFingerDown(trackpad, normalizedAmplitude); // @nocommit
+		// max_amplitude_x >= 1000 || max_amplitude_y >= 1000;
+		denoisedAmplitude.x >= 1000 || denoisedAmplitude.y >= 1000;
+#ifdef DEBUG_DUMP_TRACKPAD_AMPLITUDES
+	printf("Pad: %s ", (trackpad == L_TRACKPAD ? "L" : "R"));
+	printf("Pos (X, Y): (%4d, %4d) ", x_pos, y_pos);
+	printf("Raw ampl. (X, Y): (%4d, %4d) ", max_amplitude_x, max_amplitude_y);
+	printf("Den(%d,%d) ampl. (X, Y): (%4d, %4d) ",
+		DENOISE_METHOD, NUM_HISTORICAL_TRACKPAD_AMPLITUDES, denoisedAmplitude.x, denoisedAmplitude.y);
+	printf("Nor ampl. (X, Y): (%4d, %4d) ", normalizedAmplitude.x, normalizedAmplitude.y);
+	printf("Is down: %d\n", fingerDown);
+	// if (trackpad == L_TRACKPAD && max_amplitude_x > 500) {
+	// 	printf("DATA(%d,%d,%d,%d)\n", x_pos, y_pos, max_amplitude_x, max_amplitude_y);
+	// }
+#endif
+	if (!fingerDown) {
+		return false;
+	}
 	*xLoc = x_pos;
 	*yLoc = y_pos;
 
@@ -2012,11 +2057,11 @@ void tpadMonitor(void) {
 
 		// printf("  %4d ", lx_loc);
 		// printf("  %4d ", ly_loc);
-		// printf("(%2d/%2d) ", notchStates[L_TRACKPAD], NUM_NOTCHES);
+		// printf("(%2d/%2d) ", notchStates[L_TRACKPAD], NUM_VIRTUAL_NOTCHES);
 
 		// printf("   %4d ", rx_loc);
 		// printf("   %4d ", ry_loc);
-		// printf("(%2d/%2d) ", notchStates[R_TRACKPAD], NUM_NOTCHES);
+		// printf("(%2d/%2d) ", notchStates[R_TRACKPAD], NUM_VIRTUAL_NOTCHES);
 
 		// printf(" %4d %4d\n", tpadAdcDatas[R_TRACKPAD][18], tpadAdcDatas[L_TRACKPAD][18]);
 
