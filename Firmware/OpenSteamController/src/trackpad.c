@@ -1510,14 +1510,15 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 		}
 	}
 
-	// Update outputs only if finger was down (i.e. x_pos and y_pos are both valid)
+	// Update outputs only if finger was down (i.e. at least one of x_pos and
+	// y_pos is valid). Due to dead zones, the other may not be detected.
 	if (x_pos == -1 && y_pos == -1) {
 		return false;
 	}
 	// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
-	// Compensate for the dead zone at the top of the touchpad.
-	x_pos = x_pos == -1 ? 0 : x_pos;
-	y_pos = y_pos == -1 ? TPAD_MAX_Y : y_pos;
+	// Compensate for the dead zones at the edges of the touchpad.
+	x_pos = x_pos != -1 ? x_pos : lastXY[trackpad].x;
+	y_pos = y_pos != -1 ? y_pos : lastXY[trackpad].y;
 	pushAmplitude(trackpad, (Amplitude){
 		.x = max_amplitude_x,
 		.y = max_amplitude_y,
