@@ -1513,15 +1513,24 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 		}
 	}
 
+	uint16_t lastX = lastXY[trackpad].x;
+	lastX = lastXY[trackpad].x != -1 ? lastXY[trackpad].x : 0;
+	uint16_t lastY = lastXY[trackpad].y;
+	lastY = lastXY[trackpad].y != -1 ? lastXY[trackpad].y : TPAD_MAX_Y;
+	lastXY[trackpad].x = -1;
+	lastXY[trackpad].y = -1;
+
 	// Update outputs only if finger was down (i.e. at least one of x_pos and
 	// y_pos is valid). Due to dead zones, the other may not be detected.
 	if (x_pos == -1 && y_pos == -1) {
 		return false;
 	}
-	// From https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
+
+	// Idea from
+	// https://github.com/simvux/OpenSteamController/commit/72d1e4536538aa686b08a3de67f837acbb177df5#
 	// Compensate for the dead zones at the edges of the touchpad.
-	x_pos = x_pos != -1 ? x_pos : lastXY[trackpad].x;
-	y_pos = y_pos != -1 ? y_pos : lastXY[trackpad].y;
+	x_pos = x_pos != -1 ? x_pos : lastX;
+	y_pos = y_pos != -1 ? y_pos : lastY;
 	pushAmplitude(trackpad, (Amplitude){
 		.x = max_amplitude_x,
 		.y = max_amplitude_y,
@@ -1554,8 +1563,6 @@ bool trackpadGetLastXY(Trackpad trackpad, uint16_t* xLoc, uint16_t* yLoc) {
 	*yLoc = y_pos;
 
 	// Save last X/Y values for next time
-	uint16_t lastX = lastXY[trackpad].x;
-	uint16_t lastY = lastXY[trackpad].y;
 	lastXY[trackpad].x = *xLoc;
 	lastXY[trackpad].y = *yLoc;
 
