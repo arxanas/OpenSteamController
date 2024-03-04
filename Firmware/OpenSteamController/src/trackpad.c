@@ -870,14 +870,14 @@ static Note trackpadNotes[2] = {
 	[L_TRACKPAD] = {0, 0, 0, 0},
 	[R_TRACKPAD] = {0, 0, 0, 0},
 };
-enum InnerRingState {
-	INNER_RING_UNSET,
-	INNER_RING_INSIDE,
-	INNER_RING_OUTSIDE,
-};
-static enum InnerRingState innerRingStates[2] = {
-	[L_TRACKPAD] = INNER_RING_UNSET,
-	[R_TRACKPAD] = INNER_RING_UNSET,
+typedef enum {
+	RING_UNSET,
+	RING_INSIDE,
+	RING_OUTSIDE,
+} Ring;
+static Ring ringStates[2] = {
+	[L_TRACKPAD] = RING_UNSET,
+	[R_TRACKPAD] = RING_UNSET,
 };
 
 const double PI = 3.1415926;
@@ -890,10 +890,10 @@ static Notch notchStates[2] = {
 void resetTrackpadHaptic(Trackpad trackpad) {
 	switch (trackpad) {
 		case L_TRACKPAD:
-			innerRingStates[L_HAPTIC] = INNER_RING_UNSET;
+			ringStates[L_HAPTIC] = RING_UNSET;
 			break;
 		case R_TRACKPAD:
-			innerRingStates[R_HAPTIC] = INNER_RING_UNSET;
+			ringStates[R_HAPTIC] = RING_UNSET;
 			break;
 	}
 }
@@ -909,16 +909,19 @@ void playTrackpadHaptic(enum Haptic haptic, Loc loc) {
     if (angle < 0) {
         angle += 2 * PI;
     }
-	Notch notch = (Notch)(angle / ((2 * PI) / NUM_VIRTUAL_NOTCHES));
-	Notch lastNotch = notchStates[haptic];
-	notchStates[haptic] = notch;
+	Notch newNotch = (Notch)(angle / ((2 * PI) / NUM_VIRTUAL_NOTCHES));
+	Notch oldNotch = notchStates[haptic];
+	notchStates[haptic] = newNotch;
 
 	uint32_t distanceFromCenterSquared = norm2(loc.x, TPAD_MAX_X/2) + norm2(loc.y, TPAD_MAX_Y/2);
-	enum InnerRingState state = (distanceFromCenterSquared < norm2(200, 0)) ? INNER_RING_INSIDE : INNER_RING_OUTSIDE;
-	innerRingStates[haptic] = state;
+	Ring newRing = (distanceFromCenterSquared < norm2(200, 0)) ? RING_INSIDE : RING_OUTSIDE;
+	Ring oldRing = ringStates[haptic];
+	ringStates[haptic] = newRing;
 
-	if (state != innerRingStates[haptic] || notch != lastNotch) {
-		bool loud = (state == INNER_RING_INSIDE); // || (notch != lastNotch);
+	bool ringChanged = newRing != oldRing;
+	bool notchChanged = newNotch != oldNotch;
+	if (ringChanged || notchChanged) {
+		bool loud = newRing == RING_INSIDE;
 		Note* note = &trackpadNotes[haptic];
 		note->duration = loud ? 50 : 35; // ms, 0-65535
 		note->dutyCycle = 31; // ??, 0-255
