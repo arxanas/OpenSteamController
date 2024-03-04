@@ -68,6 +68,9 @@ enum DenoiseMethod_t {
 #define NUM_VIRTUAL_NOTCHES (8)
 // #define NUM_VIRTUAL_NOTCHES (16)
 
+// The size of the inner ring of the trackpad, used for haptic feedback.
+#define CENTER_RADIUS_PERCENTAGE (50)
+
 void initTrackpad(void);
 
 void trackpadLocUpdate(Trackpad trackpad);

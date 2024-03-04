@@ -863,8 +863,8 @@ uint32_t norm2(uint16_t lhs, uint16_t rhs) {
 }
 
 static Loc lastXY[] = {
-	[L_TRACKPAD] = { .x = 0, .y = 0, },
-	[R_TRACKPAD] = { .x = 0, .y = 0, },
+	[L_TRACKPAD] = { .x = -1, .y = -1, },
+	[R_TRACKPAD] = { .x = -1, .y = -1, },
 };
 static Note trackpadNotes[2] = {
 	[L_TRACKPAD] = {0, 0, 0, 0},
@@ -913,8 +913,15 @@ void playTrackpadHaptic(enum Haptic haptic, Loc loc) {
 	Notch oldNotch = notchStates[haptic];
 	notchStates[haptic] = newNotch;
 
-	uint32_t distanceFromCenterSquared = norm2(loc.x, TPAD_MAX_X/2) + norm2(loc.y, TPAD_MAX_Y/2);
-	Ring newRing = (distanceFromCenterSquared < norm2(200, 0)) ? RING_INSIDE : RING_OUTSIDE;
+	uint32_t distanceX = loc.x >= TPAD_MAX_X/2 ? loc.x - TPAD_MAX_X/2 : TPAD_MAX_X/2 - loc.x;
+	uint32_t distanceY = loc.y >= TPAD_MAX_Y/2 ? loc.y - TPAD_MAX_Y/2 : TPAD_MAX_Y/2 - loc.y;
+	// Normalize distances to be on the same scale, since TPAD_MAX_X != TPAD_MAX_Y:
+	const uint32_t percent = 100;
+	distanceX = (distanceX * percent) / (TPAD_MAX_X/2);
+	distanceY = (distanceY * percent) / (TPAD_MAX_Y/2);
+
+	uint32_t distanceFromCenterSquared = norm2(distanceX, 0) + norm2(distanceY, 0);
+	Ring newRing = (distanceFromCenterSquared < norm2(CENTER_RADIUS_PERCENTAGE, 0)) ? RING_INSIDE : RING_OUTSIDE;
 	Ring oldRing = ringStates[haptic];
 	ringStates[haptic] = newRing;
 
